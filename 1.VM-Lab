@@ -1,0 +1,248 @@
+## Overview
+```
+Azure Resource Group: RG-Lab-Network
+ ├── Virtual Network: vnet-lab
+ │    ├── subnet-jump  (Jumpbox)
+ │    └── subnet-web   (Web Server)
+ ├── Network Security Groups
+ │    ├── nsg-jump: allows SSH + ICMP from trusted IPs
+ │    └── nsg-web: allows HTTP/HTTPS + SSH from Jumpbox
+ ├── Virtual Machines
+ │    ├── vm-jump     (Jumpbox)
+ │    └── vm-web      (Web Server)
+ ├── Jumpbox Public IP (SSH)
+ └── Web Public IP (HTTP)
+
+```
+
+---
+## Goal
+
+Deploy a lightweight Azure environment that includes:
+- A Virtual Network with multiple subnets
+- A Linux Jumpbox and Web Server
+- NSG rules and remote SSH access
+- Fast, repeatable **manual deployments**
+
+---
+## CLI Deployment
+
+### Step 1 - Create Base Network Resources
+
+#### Create the Resource Group
+```bash
+az group create --name RG-Lab-Network --location australiaeast
+```
+#### Create VNet and Subnets
+```bash
+az network vnet create \
+  --resource-group RG-Lab-Network \
+  --name vnet-lab \
+  --address-prefix 10.0.0.0/16 \
+  --subnet-name subnet-jump \
+  --subnet-prefix 10.0.1.0/24
+
+az network vnet subnet create \
+  --resource-group RG-Lab-Network \
+  --vnet-name vnet-lab \
+  --name subnet-web \
+  --address-prefix 10.0.2.0/24
+```
+#### Create NSGs
+```bash
+az network nsg create --resource-group RG-Lab-Network --name nsg-jump
+az network nsg create --resource-group RG-Lab-Network --name nsg-web
+```
+
+---
+### Step 2 - Create SSH Keys (Local)
+Within local Linux device
+```bash
+ssh-keygen -t rsa -b 2048 -f ~/.ssh/azure_key
+```
+
+---
+### Step 3 - VM 1: Jumpbox (Public Access)
+
+#### NSG Rules
+```bash
+# Allows SSH from your home and work
+az network nsg rule create \
+  --resource-group RG-Lab-Network \
+  --nsg-name nsg-jump \
+  --name Allow-SSH \
+  --priority 1000 \
+  --destination-port-ranges 22 \
+  --protocol Tcp \
+  --access Allow \
+  --direction Inbound \
+  --source-address-prefixes 103.19.4.146
+  
+# Allows ping from home and work
+az network nsg rule create \
+  --resource-group RG-Lab-Network \
+  --nsg-name nsg-jump \
+  --name Allow-Ping \
+  --priority 1010 \
+  --protocol Icmp \
+  --access Allow \
+  --direction Inbound \
+  --source-address-prefixes 103.19.4.146 114.31.212.161
+  
+# Allows ping from inside VNet
+az network nsg rule create \
+  --resource-group RG-Lab-Network \
+  --nsg-name nsg-jump \
+  --name Allow-VNet-Inbound \
+  --priority 1020 \
+  --direction Inbound \
+  --access Allow \
+  --protocol Icmp \
+  --source-address-prefixes 10.0.0.0/16 \
+  --destination-address-prefixes 10.0.0.0/16
+```
+#### Create Jumpbox VM
+```bash
+az vm create \
+  --resource-group RG-Lab-Network \
+  --name vm-jump \
+  --image Ubuntu2404 \
+  --size Standard_B2s \
+  --vnet-name vnet-lab \
+  --subnet subnet-jump \
+  --public-ip-sku Standard \
+  --nsg nsg-jump \
+  --admin-username azureadmin \
+  --no-wait \
+  --ssh-key-value ~/.ssh/azure_key.pub
+```
+
+---
+### Step 4 - VM 2: Web Server (Internal Only)
+
+#### NSG Rules
+```bash
+# Allow SSH from Jumpbox subnet:
+az network nsg rule create \
+  --resource-group RG-Lab-Network \
+  --nsg-name nsg-web \
+  --name Allow-SSH-From-Jump \
+  --priority 1000 \
+  --direction Inbound \
+  --access Allow \
+  --protocol Tcp \
+  --destination-port-ranges 22 \
+  --source-address-prefixes 10.0.1.0/24 \
+  --destination-address-prefixes 10.0.2.0/24
+  
+# Allow ICMP from the VNet (for ping tests):
+az network nsg rule create \
+  --resource-group RG-Lab-Network \
+  --nsg-name nsg-web \
+  --name Allow-VNet-Inbound \
+  --priority 1010 \
+  --direction Inbound \
+  --access Allow \
+  --protocol Icmp \
+  --source-address-prefixes 10.0.0.0/16 \
+  --destination-address-prefixes 10.0.0.0/16
+  
+# Allow inbound HTTP (port 80)
+az network nsg rule create \
+  --resource-group RG-Lab-Network \
+  --nsg-name nsg-web \
+  --name Allow-HTTP \
+  --priority 1020 \
+  --direction Inbound \
+  --access Allow \
+  --protocol Tcp \
+  --destination-port-ranges 80 \
+  --source-address-prefixes Internet
+
+```
+
+#### Create Web VM
+```bash
+az vm create \
+  --resource-group RG-Lab-Network \
+  --name vm-web \
+  --image Ubuntu2404 \
+  --size Standard_B2s \
+  --vnet-name vnet-lab \
+  --subnet subnet-web \
+  --nsg nsg-web \
+  --admin-username azureadmin \
+  --no-wait \
+  --public-ip-sku Standard \
+  --ssh-key-value ~/.ssh/azure_key.pub
+```
+
+---
+### Step 5 - SSH Configuration (Local)
+
+Get the ip of both VMs
+```
+az vm list-ip-addresses --resource-group RG-Lab-Network --output table
+```
+ - This shows all VMs in the resource group with both private and public IPs
+
+Locally edit your SSH config file:
+```bash
+nano ~/.ssh/config
+```
+
+Add:
+```
+# Azure Jumpbox
+Host jump
+    HostName 4.197.246.212
+    User azureadmin
+    IdentityFile ~/.ssh/azure_key
+    IdentitiesOnly yes
+
+# Azure Web Server (via Jumpbox)
+Host web
+    HostName 10.0.2.4
+    User azureadmin
+    ProxyJump jump
+    IdentityFile ~/.ssh/azure_key
+    IdentitiesOnly yes
+
+```
+
+---
+### Step 6 - Install NGINX
+
+```
+ssh web
+```
+
+```
+```bash
+sudo apt update && sudo apt install nginx -y
+```
+
+```
+sudo systemctl status nginx
+```
+
+Then open in your browser:
+```
+http://4.197.154.19
+```
+You should see the default NGINX “Welcome” page.
+
+---
+## Notes
+
+ - Delete the Resource group to destroy all lab resources.
+ - Use `--public-ip-address ""` to avoid automatic public IP creation.
+- `az sshkey create` uses to RSA encryption, for ED25519 you need to create the keys  manually. This command is not used in the above steps as the workflow was changes to generate ethe keys locally.
+- All VMs are using the Standard_B2s size. They’re more expensive, but I’m using them for now since I still have free credits and want to save my free B1s hours for when those credits run out after the first month.
+- Use one of the two free disks available per region:
+```
+--os-disk-name azure-jump-osdisk \
+--os-disk-size-gb 64 \
+--storage-sku Premium_LRS
+```
+
