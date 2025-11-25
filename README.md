@@ -5,8 +5,11 @@ This repo contains my Azure labs, where I build and test different cloud setups.
 ## Prerequisites
 1. Debian WSL installed
 2. Azure CLI installed and logged in:
+```
+curl -sL https://aka.ms/InstallAzureCLIDeb | sudo bash
+```
 ```bash
-az login
+az login --use-device-code
 ```
 3. List available subscriptions:
 ```bash
