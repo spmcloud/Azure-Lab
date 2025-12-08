@@ -1,3 +1,10 @@
+<h1 align="center">Azure Lab </h1>
+
+<div align="center">
+  This repository hosts my Azure labs. It’s intention is to be a space for learning and experimenting.
+</div>
+
+
 This repo contains my Azure labs, where I build and test different cloud setups. It is intended to be a playground for learning, experimenting, and making mistakes.
 
 ---
